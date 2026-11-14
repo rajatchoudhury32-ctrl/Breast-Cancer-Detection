@@ -5,6 +5,8 @@ import numpy as np
 import joblib
 import plotly.express as px
 import plotly.graph_objects as go
+
+from pathlib import Path
 from sklearn.metrics import confusion_matrix
 
 # ---------------- PAGE CONFIG ----------------
@@ -15,170 +17,226 @@ st.set_page_config(
     layout="wide"
 )
 
-st.markdown("""
-<style>
-.main {
-    background-color: #F7FAFC;
-}
-[data-testid="stMetric"] {
-    background-color: white;
-    padding: 15px;
-    border-radius: 12px;
-    border: 1px solid #E2E8F0;
-}
-</style>
-""", unsafe_allow_html=True)
+st.title("🎗️ Breast Cancer Detection")
+st.caption("Machine Learning Prediction using Logistic Regression")
 
-# ---------------- LOAD FILES ----------------
+# ---------------- FILE LOCATOR ----------------
+
+def find_file(filename):
+    files = list(Path(".").rglob(filename))
+
+    if not files:
+        st.error(f"Required file not found: {filename}")
+        st.stop()
+
+    return files[0]
+
+
+# ---------------- LOAD MODEL ----------------
 
 @st.cache_resource
 def load_model():
-    return joblib.load("breast_cancer_model.pkl")
+    return joblib.load(find_file("breast_cancer_model.pkl"))
+
+
+@st.cache_data
+def load_features():
+    return joblib.load(find_file("feature_names.pkl"))
+
+
+# ---------------- LOAD ORIGINAL DATASET ----------------
 
 @st.cache_data
 def load_data():
-    return pd.read_csv("breast_cancer_dataset.csv")
+    dataset_path = find_file("wdbc.data")
+
+    raw = pd.read_csv(dataset_path, header=None)
+
+    features = load_features()
+
+    if raw.shape[1] != 32 or len(features) != 30:
+        raise ValueError(
+            "Unexpected dataset structure. "
+            "Expected 32 columns and 30 model features."
+        )
+
+    raw.columns = ["id", "diagnosis"] + list(features)
+
+    raw["diagnosis"] = raw["diagnosis"].astype(str).str.strip()
+
+    for col in features:
+        raw[col] = pd.to_numeric(raw[col], errors="raise")
+
+    raw["target"] = raw["diagnosis"].map({
+        "B": 0,
+        "M": 1
+    })
+
+    if raw["target"].isna().any():
+        raise ValueError("Unexpected diagnosis labels in wdbc.data.")
+
+    return raw
+
+
+# ---------------- LOAD EVALUATION FILES ----------------
 
 @st.cache_data
 def load_metrics():
-    return pd.read_csv("model_evaluation.csv")
+    return pd.read_csv(find_file("model_evaluation.csv"))
+
 
 @st.cache_data
 def load_predictions():
-    return pd.read_csv("prediction_results.csv")
+    return pd.read_csv(find_file("prediction_results.csv"))
+
 
 model = load_model()
+features = load_features()
 df = load_data()
 metrics = load_metrics()
 results = load_predictions()
 
-features = joblib.load("feature_names.pkl")
-
 # ---------------- SIDEBAR ----------------
 
-st.sidebar.title("🎗️ Breast Cancer AI")
-st.sidebar.caption("Logistic Regression System")
+st.sidebar.title("Navigation")
 
 page = st.sidebar.radio(
-    "Navigation",
-    ["Overview", "Data Analytics",
-     "Model Performance", "Prediction"]
+    "Select Page",
+    [
+        "Overview",
+        "Data Analytics",
+        "Model Performance",
+        "Prediction"
+    ]
 )
 
 st.sidebar.divider()
 st.sidebar.info(
-    "Wisconsin Diagnostic Breast Cancer Dataset"
+    "Breast Cancer Detection using Logistic Regression"
 )
 
 # ---------------- OVERVIEW ----------------
 
 if page == "Overview":
 
-    st.title("Breast Cancer Detection")
+    st.header("Project Overview")
+
     st.write(
-        "Machine learning-based tumour classification "
-        "using Logistic Regression."
+        "This project uses Logistic Regression to classify "
+        "breast cancer tumours as Benign or Malignant using "
+        "30 numerical features from the Wisconsin Diagnostic "
+        "Breast Cancer dataset."
     )
 
-    accuracy = metrics.loc[
-        metrics.Metric == "Accuracy", "Score"
-    ].iloc[0]
+    col1, col2, col3, col4 = st.columns(4)
 
-    auc_score = metrics.loc[
-        metrics.Metric == "ROC AUC", "Score"
-    ].iloc[0]
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric("Total Records", len(df))
-    c2.metric("Features", len(features))
-    c3.metric("Model Accuracy", f"{accuracy*100:.2f}%")
-    c4.metric("ROC AUC", f"{auc_score:.4f}")
-
-    st.divider()
+    col1.metric("Total Records", len(df))
+    col2.metric("Total Features", len(features))
+    col3.metric("Benign Cases", int((df["diagnosis"] == "B").sum()))
+    col4.metric("Malignant Cases", int((df["diagnosis"] == "M").sum()))
 
     st.subheader("Diagnosis Distribution")
 
-    counts = df["diagnosis"].value_counts().reset_index()
-    counts.columns = ["Diagnosis", "Count"]
-    counts["Diagnosis"] = counts["Diagnosis"].map({
-        "B": "Benign",
-        "M": "Malignant"
-    })
+    counts = df["diagnosis"].value_counts().rename(
+        index={"B": "Benign", "M": "Malignant"}
+    )
 
     fig = px.pie(
-        counts,
-        names="Diagnosis",
-        values="Count",
+        values=counts.values,
+        names=counts.index,
         hole=0.45,
-        color="Diagnosis",
-        color_discrete_map={
-            "Benign": "#3498DB",
-            "Malignant": "#E74C3C"
-        }
+        title="Benign vs Malignant Cases"
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Dataset Preview")
-    st.dataframe(df.head(10), use_container_width=True)
+
+    display_df = df.copy()
+    display_df["diagnosis"] = display_df["diagnosis"].map({
+        "B": "Benign",
+        "M": "Malignant"
+    })
+
+    st.dataframe(display_df.head(10), use_container_width=True)
 
 
 # ---------------- DATA ANALYTICS ----------------
 
 elif page == "Data Analytics":
 
-    st.title("Data Analytics")
-    st.write("Explore the dataset using interactive visualizations.")
+    st.header("Data Analytics")
 
-    feature1 = st.selectbox(
-        "Select X-axis feature", features,
-        index=features.index("mean radius")
+    st.subheader("Feature Distribution")
+
+    selected_feature = st.selectbox(
+        "Choose a feature",
+        features
     )
 
-    feature2 = st.selectbox(
-        "Select Y-axis feature", features,
-        index=features.index("mean texture")
-    )
-
-    plot_df = df.copy()
-    plot_df["Diagnosis"] = plot_df["diagnosis"].map({
-        "B": "Benign",
-        "M": "Malignant"
-    })
-
-    fig = px.scatter(
-        plot_df,
-        x=feature1,
-        y=feature2,
-        color="Diagnosis",
-        hover_data=["target"],
+    fig = px.histogram(
+        df,
+        x=selected_feature,
+        color="diagnosis",
         color_discrete_map={
-            "Benign": "#3498DB",
-            "Malignant": "#E74C3C"
+            "B": "#2878B5",
+            "M": "#E45756"
         },
-        title="Interactive Feature Comparison"
+        title=f"Distribution of {selected_feature}",
+        marginal="box"
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Feature Correlation Heatmap")
+    st.divider()
 
-    selected = st.multiselect(
-        "Choose features",
-        features,
-        default=features[:10]
+    st.subheader("Feature Relationship")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        x_feature = st.selectbox(
+            "X-axis feature",
+            features,
+            index=0
+        )
+
+    with col2:
+        y_feature = st.selectbox(
+            "Y-axis feature",
+            features,
+            index=1
+        )
+
+    fig = px.scatter(
+        df,
+        x=x_feature,
+        y=y_feature,
+        color="diagnosis",
+        color_discrete_map={
+            "B": "#2878B5",
+            "M": "#E45756"
+        },
+        title="Feature Relationship"
     )
 
-    if len(selected) >= 2:
-        corr = df[selected].corr()
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Correlation Heatmap")
+
+    selected_features = st.multiselect(
+        "Select features for correlation analysis",
+        features,
+        default=features[:8]
+    )
+
+    if len(selected_features) >= 2:
+        corr = df[selected_features].corr()
 
         fig = px.imshow(
             corr,
             text_auto=".2f",
             color_continuous_scale="RdBu_r",
-            zmin=-1,
-            zmax=1,
             title="Feature Correlation"
         )
 
@@ -191,41 +249,33 @@ elif page == "Data Analytics":
 
 elif page == "Model Performance":
 
-    st.title("Model Performance Evaluation")
+    st.header("Model Performance")
 
-    metric_names = [
-        "Accuracy", "Precision", "Recall",
-        "F1 Score", "ROC AUC"
-    ]
+    st.subheader("Evaluation Metrics")
 
-    values = [
-        metrics.loc[
-            metrics.Metric == name, "Score"
-        ].iloc[0]
-        for name in metric_names
-    ]
-
-    cols = st.columns(5)
-
-    for col, name, value in zip(cols, metric_names, values):
-        col.metric(name, f"{value*100:.2f}%")
+    st.dataframe(metrics, use_container_width=True)
 
     st.divider()
 
     st.subheader("Confusion Matrix")
 
-    actual = results["Actual"].map({
-        "Benign": 0,
-        "Malignant": 1
-    })
+    def normalize_label(value):
+        value = str(value).strip().lower()
 
-    predicted = results["Predicted"].map({
-        "Benign": 0,
-        "Malignant": 1
-    })
+        if value in ["benign", "b", "0"]:
+            return 0
+        if value in ["malignant", "m", "1"]:
+            return 1
+
+        raise ValueError(f"Unknown prediction label: {value}")
+
+    y_true = results["Actual"].map(normalize_label)
+    y_pred = results["Predicted"].map(normalize_label)
 
     cm = confusion_matrix(
-        actual, predicted, labels=[0, 1]
+        y_true,
+        y_pred,
+        labels=[0, 1]
     )
 
     fig = px.imshow(
@@ -244,28 +294,8 @@ elif page == "Model Performance":
 
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Performance Comparison")
-
-    metric_df = pd.DataFrame({
-        "Metric": metric_names,
-        "Score": values
-    })
-
-    fig = px.bar(
-        metric_df,
-        x="Metric",
-        y="Score",
-        color="Metric",
-        text=metric_df["Score"].apply(
-            lambda x: f"{x*100:.2f}%"
-        ),
-        title="Model Evaluation Metrics"
-    )
-
-    fig.update_yaxes(range=[0, 1.05])
-    st.plotly_chart(fig, use_container_width=True)
-
     st.subheader("Prediction Results")
+
     st.dataframe(results, use_container_width=True)
 
 
@@ -273,59 +303,45 @@ elif page == "Model Performance":
 
 elif page == "Prediction":
 
-    st.title("Tumour Classification")
-    st.write(
-        "Enter tumour measurements to obtain a model prediction."
-    )
+    st.header("Breast Cancer Prediction")
 
     st.warning(
-        "Educational prototype only. This model is not "
-        "a clinically validated diagnostic system."
+        "This application is an educational project and "
+        "is not intended for clinical diagnosis."
     )
 
-    mode = st.radio(
-        "Choose prediction method",
+    option = st.radio(
+        "Choose Prediction Method",
         ["Manual Input", "Upload CSV"]
     )
 
-    if mode == "Manual Input":
+    if option == "Manual Input":
+
+        st.subheader("Enter Tumour Measurements")
+
+        st.write(
+            "Enter the 30 numerical feature values "
+            "to generate a model prediction."
+        )
+
+        medians = df[features].median()
 
         with st.form("prediction_form"):
 
-            st.subheader("Enter 30 Tumour Measurements")
-
             input_values = {}
 
-            for i in range(0, len(features), 2):
+            cols = st.columns(3)
 
-                col1, col2 = st.columns(2)
-
-                f1 = features[i]
-
-                with col1:
-                    input_values[f1] = st.number_input(
-                        f1.title(),
-                        min_value=0.0,
-                        value=float(df[f1].median()),
-                        format="%.5f",
-                        key=f"input_{i}"
+            for i, feature in enumerate(features):
+                with cols[i % 3]:
+                    input_values[feature] = st.number_input(
+                        feature,
+                        value=float(medians[feature]),
+                        format="%.6f"
                     )
 
-                if i + 1 < len(features):
-
-                    f2 = features[i + 1]
-
-                    with col2:
-                        input_values[f2] = st.number_input(
-                            f2.title(),
-                            min_value=0.0,
-                            value=float(df[f2].median()),
-                            format="%.5f",
-                            key=f"input_{i+1}"
-                        )
-
             submitted = st.form_submit_button(
-                "Predict Tumour Class",
+                "Predict Diagnosis",
                 use_container_width=True
             )
 
@@ -337,21 +353,24 @@ elif page == "Prediction":
             )
 
             prediction = model.predict(input_df)[0]
-            probability = model.predict_proba(input_df)[0]
 
-            if prediction == 1:
-                st.error("Model prediction: MALIGNANT")
+            probabilities = model.predict_proba(input_df)[0]
+
+            result_label = (
+                "Malignant" if int(prediction) == 1
+                else "Benign"
+            )
+
+            st.subheader("Prediction Result")
+
+            if int(prediction) == 1:
+                st.error("Prediction: Malignant")
             else:
-                st.success("Model prediction: BENIGN")
-
-            st.subheader("Class Probabilities")
+                st.success("Prediction: Benign")
 
             prob_df = pd.DataFrame({
                 "Diagnosis": ["Benign", "Malignant"],
-                "Probability": [
-                    probability[0],
-                    probability[1]
-                ]
+                "Probability": probabilities
             })
 
             fig = px.bar(
@@ -359,84 +378,81 @@ elif page == "Prediction":
                 x="Diagnosis",
                 y="Probability",
                 color="Diagnosis",
-                text=prob_df["Probability"].apply(
-                    lambda x: f"{x*100:.2f}%"
-                ),
-                color_discrete_map={
-                    "Benign": "#3498DB",
-                    "Malignant": "#E74C3C"
-                },
-                range_y=[0, 1]
+                text_auto=".2%",
+                title="Prediction Probabilities"
             )
 
             st.plotly_chart(fig, use_container_width=True)
 
-            st.caption(
-                "Probabilities are model estimates, not clinical certainty."
-            )
-
     else:
 
+        st.subheader("Upload CSV for Batch Prediction")
+
         uploaded_file = st.file_uploader(
-            "Upload a CSV containing all 30 feature columns",
+            "Upload a CSV containing all 30 model features",
             type=["csv"]
         )
 
-        if uploaded_file:
+        if uploaded_file is not None:
 
-            batch = pd.read_csv(uploaded_file)
+            input_df = pd.read_csv(uploaded_file)
 
             missing = [
-                f for f in features
-                if f not in batch.columns
+                feature for feature in features
+                if feature not in input_df.columns
             ]
 
             if missing:
                 st.error(
-                    f"Missing required columns: {missing}"
+                    "Missing required feature columns: "
+                    + ", ".join(missing)
                 )
-
-            elif batch.empty:
-                st.error("The uploaded CSV is empty.")
-
-            elif not batch[features].apply(
-                pd.to_numeric, errors="coerce"
-            ).notna().all().all():
-                st.error("All 30 features must contain valid numeric values.")
-
-            elif (batch[features] < 0).any().any():
-                st.error("Feature measurements cannot be negative.")
 
             else:
+                try:
+                    input_df = input_df[features].apply(
+                        pd.to_numeric,
+                        errors="raise"
+                    )
 
-                predictions = model.predict(batch[features])
-                probabilities = model.predict_proba(
-                    batch[features]
-                )
+                    if not np.isfinite(input_df.to_numpy()).all():
+                        raise ValueError(
+                            "CSV contains missing or infinite values."
+                        )
 
-                output = batch.copy()
+                    predictions = model.predict(input_df)
 
-                output["Predicted Diagnosis"] = [
-                    "Malignant" if p == 1 else "Benign"
-                    for p in predictions
-                ]
+                    probabilities = model.predict_proba(input_df)
 
-                output["Benign Probability"] = probabilities[:, 0]
-                output["Malignant Probability"] = probabilities[:, 1]
+                    output = input_df.copy()
 
-                st.success("Predictions generated successfully!")
+                    output["Predicted Diagnosis"] = [
+                        "Malignant" if int(p) == 1 else "Benign"
+                        for p in predictions
+                    ]
 
-                st.dataframe(
-                    output,
-                    use_container_width=True
-                )
+                    output["Benign Probability"] = probabilities[:, 0]
+                    output["Malignant Probability"] = probabilities[:, 1]
 
-                st.download_button(
-                    "Download Prediction Results",
-                    data=output.to_csv(index=False),
-                    file_name="breast_cancer_predictions.csv",
-                    mime="text/csv"
-                )
+                    st.success("Predictions generated successfully!")
+
+                    st.dataframe(
+                        output,
+                        use_container_width=True
+                    )
+
+                    csv = output.to_csv(index=False).encode("utf-8")
+
+                    st.download_button(
+                        "Download Prediction Results",
+                        data=csv,
+                        file_name="breast_cancer_predictions.csv",
+                        mime="text/csv"
+                    )
+
+                except Exception as e:
+                    st.error(f"Could not process the uploaded CSV: {e}")
+
 
 # ---------------- FOOTER ----------------
 
@@ -444,6 +460,5 @@ st.divider()
 
 st.caption(
     "Breast Cancer Detection | Logistic Regression | "
-    "Wisconsin Diagnostic Dataset | Academic Project"
+    "Wisconsin Diagnostic Breast Cancer Dataset"
 )
-
